@@ -400,10 +400,10 @@ st.divider()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_solution, tab_align, tab_period, tab_about = st.tabs([
-    "🔧 Solution Analysis",
-    "📌 Header Alignment",
-    "📋 Line Level Analysis",
-    "📖 Analysis Logic",
+    "Solution Analysis",
+    "Header Alignment",
+    "Line Level Analysis",
+    "Analysis Logic",
 ])
 
 # Shared column keys for identifiers shown in every analysis tab
@@ -501,6 +501,43 @@ with tab_period:
     except Exception:
         st.dataframe(_display_p, use_container_width=True, height=520)
 
+    with st.expander("Column guide — what each column in this table means"):
+        st.markdown("""
+**This table shows one row per quotation line** — so you can see both the line's own values
+and the group-level analysis results repeated on every line that belongs to the same group.
+
+| Section | Column | What it tells you |
+|---|---|---|
+| **Identifiers** | Quotation_No, Catalog_No | Group keys |
+| **Raw Data** | C_START_DATE, C_END_DATE | This line's own validity start and end dates (from the ERP) |
+| **Raw Data** | STATE | Line state: released, created, planned, cancelled |
+| **Raw Data** | C_PRES_VALID_FROM / TO | Header validity window (same for all lines in the quotation) |
+| **Raw Data** | BUY_QTY_DUE | Purchase quantity for this specific line |
+| **Period (line)** | line_period_bucket | Which period bucket this line maps to (monthly, quarterly, …, or "excluded") |
+| **Period (line)** | is_period_outlier | YES if this line's duration does not match the group's dominant pattern |
+| **Group Info** | group_line_count | Total lines in the group (all states) — same value on all rows in the group |
+| **Group Info** | group_active_line_count | Active lines used in the analysis — same for all rows |
+| **Group Info** | group_start / group_end | Earliest and latest active dates in the group — same for all rows |
+| **Period Analysis** | inferred_period_pattern | The dominant period the group follows — same for all rows in the group |
+| **Period Analysis** | inferred_period_days | Target days for that pattern — same for all rows |
+| **Period Analysis** | avg_period_days | Mean active line duration (for reference) — same for all rows |
+| **Period Analysis** | period_confidence_pct | % of active lines matching the pattern — same for all rows |
+| **Quantity Analysis** | canonical_qty | Most frequent quantity in the group — same for all rows |
+| **Quantity Analysis** | qty_confidence_pct | % of active lines with the canonical quantity — same for all rows |
+| **Quantity Analysis** | active_line_qtys | All active line quantities listed in date order — same for all rows |
+
+**Why do group-level values repeat on every line?**
+So you can filter, sort, or export the data and still see the group context on every row.
+For example: filtering to `is_period_outlier = YES` shows you the outlier lines AND their
+group's inferred pattern and confidence, so you can immediately assess the severity.
+
+**Colour coding:**
+- Red background — issue: period outlier, low period confidence (< 50%)
+- Yellow background — warning: moderate period confidence (50–70%)
+
+> For the full algorithm with pseudo-code → see the **Analysis Logic** tab.
+        """)
+
 
 # ═══════════════════════════════════════════════════════════════
 #  TAB 2 — HEADER ALIGNMENT
@@ -555,8 +592,46 @@ with tab_align:
             key="dl_align",
         )
 
+    with st.expander("Column guide — what each column in this table means"):
+        st.markdown(f"""
+**This table shows one row per group** — header alignment is a group-level metric.
+
+| Column | What it tells you |
+|---|---|
+| Quotation_No | Quotation identifier |
+| Catalog_No | Product/article identifier |
+| C_PRES_VALID_FROM | The date the quotation header officially opens |
+| C_PRES_VALID_TO | The date the quotation header officially closes |
+| group_line_count | Total lines in the group (all states) |
+| group_active_line_count | Lines used in the analysis (cancelled/placeholder/once excluded) |
+| orig_pres_count | Lines with C_ORIG_PRES_LINE_DB = true — these get +365 days on header renewal |
+| group_start | Earliest effective date among active lines |
+| group_end | Latest effective date among active lines |
+| actual_coverage_days | True days covered (gaps excluded) — interval union of active lines |
+| group_span_days | Naive first-to-last span, including any gaps |
+| overlap_days | Days covered by two or more lines simultaneously |
+| overlap_count | Number of overlapping line pairs |
+| gap_days | Uncovered days within the group span (0 = fully continuous) |
+| gap_count | Number of separate uncovered periods |
+| **header_aligned** | **YES** if group coverage matches header within ±{TOLERANCE_DAYS} days on both sides |
+| **start_alignment** | "aligned" or "starts Nd late/early" — how far off the group start is from the header start |
+| **end_alignment** | "aligned" or "ends Nd early/late" — how far off the group end is from the header end |
+| inferred_period_pattern | Dominant repeating period detected for this group |
+| inferred_period_days | Target days for the inferred pattern |
+| lines_to_add | New lines needed to fill all cleanly-calculable gaps |
+
+**Reading start_alignment and end_alignment:**
+- `aligned` — within {TOLERANCE_DAYS} days of the header date (considered correct)
+- `starts 30d late` — the group's first active line begins 30 days **after** the header opens (gap at the start)
+- `starts 15d early` — the group's first active line begins 15 days **before** the header opens (unusual)
+- `ends 30d early` — the group's last active line ends 30 days **before** the header closes (gap at the end)
+- `ends 15d late` — the group coverage extends 15 days **past** the header close date (unusual)
+
+> For the full algorithm with pseudo-code → see the **Analysis Logic** tab.
+        """)
+
     st.divider()
-    with st.expander("📖 How this analysis works — definitions, exclusions & calculations"):
+    with st.expander("How this analysis works — definitions, exclusions & calculations"):
 
         st.markdown("### Which lines are included?")
         st.markdown("""
@@ -843,19 +918,757 @@ with tab_solution:
             key="dl_sol",
         )
 
+    with st.expander("Column guide — what each column in this table means"):
+        st.markdown("""
+**This table shows one row per group** (one unique Quotation + Product combination).
+All numbers are computed automatically from the ERP data — no manual input.
+
+| Section | Column | What it tells you |
+|---|---|---|
+| **Identifiers** | Quotation_No, Catalog_No | The two keys that define a group |
+| **Header Dates** | C_PRES_VALID_FROM / TO | The validity window declared on the quotation header |
+| **Header Dates** | groups_in_quotation | How many distinct products (Catalog_No) exist in this quotation |
+| **Group Info** | group_line_count | Total lines in the group (all states, including cancelled) |
+| **Group Info** | group_active_line_count | Lines actually used in the analysis (cancelled / placeholder / once excluded) |
+| **Group Info** | group_start / group_end | Earliest and latest effective dates among active lines |
+| **Coverage** | actual_coverage_days | True days covered by at least one active line (gaps excluded) |
+| **Coverage** | group_span_days | Naive span from first to last date — includes any internal gaps |
+| **Coverage** | gap_days | Uncovered days = span − coverage. Zero means no gaps |
+| **Coverage** | gap_count | Number of separate uncovered periods detected |
+| **Coverage** | overlap_days | Days covered by two or more lines simultaneously |
+| **Coverage** | overlap_count | How many times a line starts before the previous one has ended |
+| **Header Alignment** | header_aligned | YES if the group's coverage window matches the header (±5 days on both sides) |
+| **Header Alignment** | start_alignment | How many days the group starts after (late) or before (early) the header |
+| **Header Alignment** | end_alignment | How many days the group ends before (early) or after (late) the header |
+| **Visual** | coverage_bar | 48-character timeline: █ = covered · ░ = gap · ▓ = overlap · pipe char = line boundary |
+| **Visual** | active_line_periods | Date range of each active line, listed in order |
+| **Period Analysis** | inferred_period_pattern | Dominant repeating period (quarterly, monthly, …) detected by voting |
+| **Period Analysis** | inferred_period_days | Target days for that pattern (quarterly = 90, annual = 365, …) |
+| **Period Analysis** | avg_period_days | Simple mean of active line durations (for reference only — not used for pattern) |
+| **Period Analysis** | period_confidence_pct | % of active lines that match the inferred pattern. 100% = perfect agreement |
+| **Quantity Analysis** | canonical_qty | Most frequent purchase quantity among active lines |
+| **Quantity Analysis** | qty_confidence_pct | % of active lines with the canonical quantity. 100% = all lines agree |
+| **Quantity Analysis** | active_line_qtys | Quantity of each active line listed in date order (e.g. "100 pipe 100 pipe 200") |
+| **Solution** | lines_to_add | Total new lines needed to fill all cleanly-calculable gaps |
+| **Solution** | gaps_solved_ratio | e.g. "3gap/2l" = 3 gaps found, 2 fit the pattern cleanly |
+| **Solution** | gap_list | Each gap's date range and size |
+| **Solution** | solution_list | For each gap: how many lines to add, or "✗" if it does not fit cleanly |
+
+> For full algorithm details, pseudo-code, and worked examples → see the **Analysis Logic** tab.
+        """)
+
 
 # ═══════════════════════════════════════════════════════════════
 #  TAB 4 — ANALYSIS LOGIC (About / Metadata)
 # ═══════════════════════════════════════════════════════════════
 with tab_about:
-    st.header("How the Analysis Works")
+    st.header("Analysis Logic & Column Reference")
     st.caption(
-        "Reference documentation for every calculated column. "
-        "Use this to understand, verify, or challenge the results."
+        "Complete documentation for every calculated column and algorithm. "
+        "Written for both technical users (pseudo-code, formulas) and "
+        "non-technical users (plain-English explanations and worked examples)."
     )
 
+    # ── Overview ──────────────────────────────────────────────────────────────
+    with st.expander("What does this tool do? — non-technical overview", expanded=True):
+        st.markdown("""
+### What is this tool?
+
+This tool reads a raw Excel export from the ERP system and automatically analyses the
+**data quality** of quotation lines. It flags problems that are invisible in the raw data:
+
+| Problem | What it means |
+|---|---|
+| Gaps in coverage | Some date ranges in a quotation group have no line — products may go undelivered |
+| Period inconsistency | One or more lines have a different duration than the rest of the group |
+| Quantity inconsistency | Lines in the same group have different purchase quantities |
+| Header misalignment | The group's coverage window does not match the quotation header's validity dates |
+
+**How it works — in one sentence:**
+The tool groups lines by product and quotation, then analyses each group independently,
+writing diagnosis columns back to every row so the results can be filtered, sorted, and exported.
+
+**No manual calculation is needed.** Every result is deterministic: the same input always
+produces the same output. No AI or guessing is involved.
+
+**Output:** The original file with extra columns appended. The "Solution Analysis" tab
+shows the key fix-actions per group.
+        """)
+
+    # ── Groups ────────────────────────────────────────────────────────────────
+    with st.expander("Groups — how rows are organised"):
+        st.markdown("""
+### What is a "group"?
+
+Two rows belong to the same **group** if they share the same `Quotation_No` **AND** the same `Catalog_No`.
+
+A group represents **all the delivery schedule lines for one product within one quotation**.
+For example, a quarterly delivery schedule for product ART-001 in quotation Q-100 might have
+4 lines (one per quarter), all in the same group.
+
+**Why group by both keys?**
+A single quotation can cover multiple products. Each product has its own delivery schedule
+and must be analysed independently — otherwise the gaps and patterns of different products
+would be mixed together.
+
+**Example:**
+```
+Quotation_No   Catalog_No   → Group
+Q-100          ART-001      → Group A  (4 lines, one per quarter)
+Q-100          ART-002      → Group B  (2 lines, semi-annual)
+Q-200          ART-001      → Group C  (1 line, annual)
+```
+Three separate groups, analysed completely independently.
+
+**Group-level columns** (e.g. `inferred_period_pattern`, `gap_days`) are calculated once per
+group and then written to **every row** in the group. This means you can filter on any single
+row and still see the group's full diagnosis — which is essential when exporting to Excel.
+        """)
+
+    # ── Active lines ──────────────────────────────────────────────────────────
+    with st.expander("Active lines — which lines are included in calculations"):
+        st.markdown(f"""
+### What is an "active" line?
+
+Not all lines in a group participate in the analysis. A line is **excluded** if any of the
+following is true. The tool still counts excluded lines in `group_line_count`, but they do
+not affect coverage, period pattern, or quantity calculations.
+
+| Exclusion rule | Column checked | Why excluded |
+|---|---|---|
+| Line is cancelled | `STATE = "cancelled"` | Cancelled lines are never renewed and no longer affect delivery |
+| Line is a placeholder | `C_END_DATE − C_START_DATE < 5 days` | Very short lines (near-zero duration) are administrative markers, not real delivery periods |
+| Single-use line | `C_PERIOD = "once"` | Once-only lines are not part of a repeating schedule |
+
+All other lines — regardless of state (released, created, planned) — are treated as **active**.
+
+### Special case: empty dates (renewable lines)
+
+Some lines have no start or end date. These are **renewable lines** whose coverage floats
+with the quotation header. The tool substitutes:
+
+```
+if C_START_DATE is empty → use header_start  (C_PRES_VALID_FROM)
+if C_END_DATE   is empty → use header_end    (C_PRES_VALID_TO)
+if both are empty        → line covers the full header period
+```
+
+This substitution happens **before** any other calculation.
+
+### Pseudo-code
+
+```
+for each line in group:
+
+    -- Step 1: Resolve effective dates
+    effective_start = C_START_DATE  if not empty  else  header_start
+    effective_end   = C_END_DATE    if not empty  else  header_end
+
+    -- Step 2: Apply exclusion rules (in order)
+    if STATE == "cancelled":
+        line_period_bucket = "excluded (cancelled)"
+        is_period_outlier  = "N/A"
+        is_qty_outlier     = "N/A"
+        SKIP this line
+
+    duration = effective_end - effective_start   (in days)
+
+    if duration < {TOLERANCE_DAYS}:
+        line_period_bucket = "excluded (placeholder)"
+        SKIP this line
+
+    if C_PERIOD == "once":
+        line_period_bucket = "excluded (once)"
+        SKIP this line
+
+    -- If we reach here, the line is ACTIVE
+    include in coverage, period, and quantity calculations
+```
+
+**Columns produced:**
+- `group_line_count` — total rows in group (all states)
+- `group_active_line_count` — rows that passed all exclusion rules
+        """)
+
+    # ── Period pattern ────────────────────────────────────────────────────────
+    with st.expander("Period pattern detection — bucket voting algorithm"):
+        st.markdown("""
+### What is period pattern detection?
+
+Every group of lines should follow a **repeating schedule** — for example, quarterly deliveries
+where each line covers exactly one quarter (≈ 90 days). This section explains how the tool
+detects that pattern automatically.
+
+### Why not use the average duration?
+
+If 4 lines are 90 days and 1 line is 30 days, the mean = (4×90 + 30) / 5 = **84 days**.
+84 days does not match any standard period. The correct answer is **quarterly (90 days)**
+with one outlier. Bucket voting finds this correctly; the mean does not.
+
+The mean is still stored in `avg_period_days` for reference but is never used to determine
+the pattern.
+
+### Standard period buckets
+
+| Pattern | Target days | Tolerance ± | Valid range |
+|---|---|---|---|
+| monthly | 30 | ±10 | 20–40 days |
+| bi-monthly | 60 | ±10 | 50–70 days |
+| quarterly | 90 | ±10 | 80–100 days |
+| 4-month | 120 | ±10 | 110–130 days |
+| semi-annual | 180 | ±12 | 168–192 days |
+| annual | 365 | ±15 | 350–380 days |
+| irregular | — | — | anything outside all ranges above |
+
+Buckets are **non-overlapping by design**: a duration cannot match two buckets simultaneously.
+The gaps between ranges (e.g. 101–109 days between quarterly and 4-month) are intentional.
+
+### Pseudo-code
+
+```
+-- Step 1: Compute duration for each active line
+for each active line:
+    duration_days = effective_end - effective_start   (in days)
+
+-- Step 2: Map each duration to a bucket
+for each active line:
+    line_period_bucket = "irregular"   (default)
+    for each (bucket_name, target_days, tolerance) in PERIOD_BUCKETS:
+        if abs(duration_days - target_days) <= tolerance:
+            line_period_bucket = bucket_name
+            break   -- stop at first match (buckets never overlap)
+
+-- Step 3: Count votes per bucket
+votes = {}
+for each active line:
+    votes[line_period_bucket] += 1
+
+-- Step 4: Find the winning bucket
+winning_bucket = bucket with the highest vote count
+-- Tie-break: if two buckets share the most votes, the one with the
+-- larger target_days wins (longer period takes priority)
+
+inferred_period_pattern = winning_bucket.name
+inferred_period_days    = winning_bucket.target_days
+
+-- Step 5: Calculate confidence
+period_confidence_pct = (winning_votes / total_active_lines) × 100
+
+-- Step 6: Flag outliers
+for each active line:
+    if line_period_bucket != winning_bucket.name:
+        is_period_outlier = "YES"
+    else:
+        is_period_outlier = "NO"
+
+-- Edge case: 0 active lines
+if no active lines:
+    inferred_period_pattern = "no active lines"
+    period_confidence_pct   = 0
+    is_period_outlier       = "N/A" on all lines
+
+-- Edge case: all lines map to "irregular"
+if winning_bucket == "irregular":
+    inferred_period_days = median of all active durations
+```
+
+### Worked example
+
+```
+Group: Q-100 / ART-001
+Active lines and durations:
+  Line 1: Jan 1  → Mar 31   →  89 days
+  Line 2: Apr 1  → Jun 30   →  90 days
+  Line 3: Jul 1  → Sep 30   →  91 days
+  Line 4: Oct 1  → Oct 31   →  30 days  ← looks wrong
+  Line 5: Nov 1  → Jan 31   →  91 days
+
+Bucket mapping:
+  89d  → quarterly  (|89-90| = 1 ≤ 10) ✓
+  90d  → quarterly  (|90-90| = 0 ≤ 10) ✓
+  91d  → quarterly  (|91-90| = 1 ≤ 10) ✓
+  30d  → monthly    (|30-30| = 0 ≤ 10) ✓  ← does NOT match quarterly
+  91d  → quarterly  (|91-90| = 1 ≤ 10) ✓
+
+Votes: { quarterly: 4,  monthly: 1 }
+Winner: quarterly (4 votes)
+
+Output:
+  inferred_period_pattern = "quarterly"
+  inferred_period_days    = 90
+  period_confidence_pct   = 4 / 5 × 100 = 80%
+  avg_period_days         = (89+90+91+30+91) / 5 = 78.2  ← misleading, not used
+
+Line-level:
+  Line 1 → is_period_outlier = "NO"   (quarterly ✓)
+  Line 2 → is_period_outlier = "NO"   (quarterly ✓)
+  Line 3 → is_period_outlier = "NO"   (quarterly ✓)
+  Line 4 → is_period_outlier = "YES"  (monthly ≠ quarterly)
+  Line 5 → is_period_outlier = "NO"   (quarterly ✓)
+```
+
+**Columns produced:**
+- Per line: `line_duration_days`, `line_period_bucket`, `is_period_outlier`
+- Per group: `inferred_period_pattern`, `inferred_period_days`, `avg_period_days`, `period_confidence_pct`
+        """)
+
+    # ── Quantity pattern ───────────────────────────────────────────────────────
+    with st.expander("Quantity pattern detection — mode voting algorithm"):
+        st.markdown("""
+### What is quantity pattern detection?
+
+All active lines in a group should carry the same **purchase quantity** (`BUY_QTY_DUE`).
+The tool finds the most common quantity (the "canonical" quantity) and flags deviations.
+
+### Why use mode (most frequent) instead of average?
+
+If 4 lines have qty = 100 and 1 line has qty = 500, the mean = 180. That is not the correct
+quantity for any line. The mode correctly identifies **100** as the canonical quantity and
+flags the 500 line as an outlier.
+
+### Tie-breaking rule
+
+If two quantities appear equally often, the **larger value is chosen** as canonical.
+Rationale: a larger quantity more likely represents the real contract value, while a smaller
+one may be a correction attempt or data entry error.
+
+### Pseudo-code
+
+```
+-- Step 1: Collect quantities from active lines only
+active_qtys = [line.BUY_QTY_DUE for each active line]
+
+-- Step 2: Count how many times each quantity appears
+qty_vote = count occurrences of each distinct value in active_qtys
+
+-- Step 3: Find the most frequent count
+top_count = max(qty_vote.values())
+
+-- Step 4: Find all quantities tied for the top count
+tied_qtys = [qty for qty, count in qty_vote if count == top_count]
+
+-- Step 5: Tie-break — larger value wins
+canonical_qty = max(tied_qtys)
+
+-- Step 6: Calculate confidence
+qty_confidence_pct = (top_count / total_active_lines) × 100
+
+-- Step 7: Flag outliers
+for each active line:
+    if line.BUY_QTY_DUE != canonical_qty:
+        is_qty_outlier = "YES"
+    else:
+        is_qty_outlier = "NO"
+
+-- Edge case: 0 active lines
+canonical_qty      = blank
+qty_confidence_pct = 0
+is_qty_outlier     = "N/A" on all lines
+```
+
+### Worked examples
+
+**Example 1 — clear winner:**
+```
+Active quantities: 100, 100, 100, 200, 100
+qty_vote: { 100: 4,  200: 1 }
+canonical_qty       = 100
+qty_confidence_pct  = 4/5 × 100 = 80%
+→ The 200-quantity line: is_qty_outlier = "YES"
+```
+
+**Example 2 — tie-break:**
+```
+Active quantities: 100, 100, 200, 200
+qty_vote: { 100: 2,  200: 2 }
+tied_qtys     = [100, 200]
+canonical_qty = max([100, 200]) = 200   ← larger wins
+qty_confidence_pct = 2/4 × 100 = 50%
+→ The two 100-quantity lines: is_qty_outlier = "YES"
+```
+
+**Columns produced:**
+- Per line: `is_qty_outlier`
+- Per group: `canonical_qty`, `qty_confidence_pct`, `active_line_qtys`
+
+`active_line_qtys` is a pipe-separated string of quantities in date order,
+e.g. `"100 | 100 | 200 | 100"`. It lets you see the full picture at a glance.
+        """)
+
+    # ── Coverage ───────────────────────────────────────────────────────────────
+    with st.expander("Coverage analysis — interval union, gaps, and overlaps"):
+        st.markdown("""
+### What is coverage analysis?
+
+A group's active lines should cover a **continuous date range with no gaps**. Coverage
+analysis answers three questions:
+- How many days is the group supposed to span? (`group_span_days`)
+- How many days are actually covered by at least one line? (`actual_coverage_days`)
+- How many days fall inside the span but have no coverage? (`gap_days`)
+- Are any days covered by two lines simultaneously? (`overlap_days`)
+
+| Metric | Formula | What it reveals |
+|---|---|---|
+| `group_span_days` | max(end) − min(start) | Naive total span — **includes gaps inside** |
+| `actual_coverage_days` | Interval union of active lines | True days covered |
+| `gap_days` | span − coverage | Total uncovered days (0 = no gaps) |
+| `overlap_days` | sum(durations) − coverage | Days double-covered (0 = no overlap) |
+
+### The interval union algorithm
+
+The interval union merges all line date ranges that touch or overlap, then sums the merged
+blocks to get true coverage. Two lines are merged if the second starts on or before the day
+after the first ends — meaning they are adjacent (no gap) or overlapping.
+
+### Pseudo-code
+
+```
+-- Step 1: Sort active lines by effective start date
+sorted_lines = sort active lines ascending by effective_start
+
+-- Step 2: Initialise
+block_start = sorted_lines[0].effective_start
+block_end   = sorted_lines[0].effective_end
+merged_blocks = []
+sum_individual = 0
+
+-- Step 3: Walk through remaining lines
+for each line in sorted_lines[1:]:
+
+    sum_individual += (line.effective_end - line.effective_start)
+
+    if line.effective_start <= block_end + 1 day:
+        -- Adjacent or overlapping → extend the current block
+        block_end = max(block_end, line.effective_end)
+    else:
+        -- Gap found → save current block, start a new one
+        merged_blocks.append((block_start, block_end))
+        block_start = line.effective_start
+        block_end   = line.effective_end
+
+-- Step 4: Save final block
+merged_blocks.append((block_start, block_end))
+
+-- Step 5: Compute metrics
+actual_coverage_days = sum(b.end - b.start  for b in merged_blocks)
+group_span_days      = merged_blocks[-1].end - merged_blocks[0].start
+gap_days             = group_span_days - actual_coverage_days
+overlap_days         = max(0,  sum_individual - actual_coverage_days)
+
+-- Step 6: Count gaps (each gap > TOLERANCE_DAYS counts as one)
+gap_count = 0
+for consecutive pair (line_i, line_j) in sorted_lines:
+    gap = line_j.effective_start - line_i.effective_end - 1
+    if gap > TOLERANCE_DAYS:
+        gap_count += 1
+
+-- Step 7: Count overlaps
+overlap_count = 0
+furthest_end  = sorted_lines[0].effective_end
+for each line in sorted_lines[1:]:
+    if line.effective_start < furthest_end:
+        overlap_count += 1
+    furthest_end = max(furthest_end, line.effective_end)
+```
+
+### Worked example
+
+```
+Group: Q-100 / ART-001
+Active lines (sorted by start):
+  Line A: Jan 1, 2023 → Mar 31, 2023   (89 days)
+  Line B: Apr 1, 2023 → Jun 30, 2023   (90 days)
+  Line C: Sep 1, 2023 → Nov 30, 2023   (91 days)
+
+Processing:
+  Start → block = [Jan 1 → Mar 31]
+
+  Line B: Apr 1 ≤ Mar 31 + 1 = Apr 1   → ADJACENT → extend block
+          block = [Jan 1 → Jun 30]
+
+  Line C: Sep 1 > Jun 30 + 1 = Jul 1   → GAP → save block, start new
+          merged = [(Jan 1 → Jun 30)]
+          block  = [Sep 1 → Nov 30]
+
+  End: merged = [(Jan 1 → Jun 30), (Sep 1 → Nov 30)]
+
+Results:
+  actual_coverage_days = 181 + 91 = 272 days
+  group_span_days      = Nov 30 - Jan 1 = 333 days
+  gap_days             = 333 - 272 = 61 days   ← Jul + Aug uncovered
+  gap_count            = 1
+  overlap_days         = (89 + 90 + 91) - 272 = -2 → capped at 0
+  overlap_count        = 0
+```
+
+**Columns produced:**
+- `group_start`, `group_end`, `group_span_days`
+- `actual_coverage_days`, `gap_days`, `gap_count`
+- `overlap_days`, `overlap_count`, `gap_details`
+- `coverage_bar` — 48-character ASCII timeline
+        """)
+
+    # ── Header alignment ───────────────────────────────────────────────────────
+    with st.expander("Header alignment — does the group match the quotation header?"):
+        st.markdown(f"""
+### What is header alignment?
+
+The quotation **header** defines an official validity window:
+`C_PRES_VALID_FROM` (header start) → `C_PRES_VALID_TO` (header end).
+
+The group's active lines define the **actual coverage window**: `group_start` → `group_end`.
+
+These two windows should match. If they don't:
+- Group starts **late** → uncovered period at the beginning of the header
+- Group ends **early** → uncovered period at the end of the header
+- Group starts **early** → lines exist before the quotation is valid (unusual)
+- Group ends **late** → lines exist after the quotation has closed (unusual)
+
+A **{TOLERANCE_DAYS}-day tolerance** is applied to absorb small administrative shifts.
+
+### Pseudo-code
+
+```
+-- Compute differences (positive = late/over, negative = early/under)
+start_diff = group_start - header_start
+    -- + means group starts LATE  (gap at the beginning)
+    -- - means group starts EARLY (lines before the header opens)
+
+end_diff = group_end - header_end
+    -- - means group ends EARLY   (gap at the end)
+    -- + means group ends LATE    (lines past the header close)
+
+-- Determine alignment
+if abs(start_diff) <= TOLERANCE_DAYS AND abs(end_diff) <= TOLERANCE_DAYS:
+    header_aligned = "YES"
+else:
+    header_aligned = "NO"
+
+-- Human-readable descriptions
+start_alignment:
+    abs(start_diff) <= TOLERANCE_DAYS  → "aligned"
+    start_diff > 0                     → "starts {{start_diff}}d late"
+    start_diff < 0                     → "starts {{abs(start_diff)}}d early"
+
+end_alignment:
+    abs(end_diff) <= TOLERANCE_DAYS    → "aligned"
+    end_diff < 0                       → "ends {{abs(end_diff)}}d early"
+    end_diff > 0                       → "ends {{end_diff}}d late"
+```
+
+### Worked examples
+
+**Example 1 — misaligned start (group starts late):**
+```
+Header: Jan 1, 2023 → Dec 31, 2023
+Group:  Feb 1, 2023 → Dec 31, 2023
+
+start_diff = Feb 1 - Jan 1 = +31 days  → "starts 31d late"
+end_diff   = Dec 31 - Dec 31 = 0 days  → "aligned"
+header_aligned = "NO"  (31 > {TOLERANCE_DAYS})
+
+Interpretation: There is a 31-day uncovered period in January.
+A new line covering Jan 1 → Jan 31 needs to be added.
+```
+
+**Example 2 — misaligned end (group ends early):**
+```
+Header: Jan 1, 2023 → Dec 31, 2023
+Group:  Jan 1, 2023 → Sep 30, 2023
+
+start_diff = 0 → "aligned"
+end_diff   = Sep 30 - Dec 31 = -92 days → "ends 92d early"
+header_aligned = "NO"  (92 > {TOLERANCE_DAYS})
+
+Interpretation: October, November, December are not covered.
+About one quarter's worth of lines is missing at the end.
+```
+
+**Example 3 — within tolerance (aligned):**
+```
+Header: Jan 1, 2023 → Dec 31, 2023
+Group:  Jan 3, 2023 → Dec 29, 2023
+
+start_diff = +2 days → abs(2) ≤ {TOLERANCE_DAYS} → "aligned"
+end_diff   = -2 days → abs(2) ≤ {TOLERANCE_DAYS} → "aligned"
+header_aligned = "YES"
+```
+
+**Columns produced:**
+- `header_aligned` — YES / NO
+- `start_alignment` — "aligned", "starts Nd late", "starts Nd early"
+- `end_alignment` — "aligned", "ends Nd early", "ends Nd late"
+        """)
+
+    # ── Solution suggestion ────────────────────────────────────────────────────
+    with st.expander("Solution suggestion — how lines_to_add is calculated"):
+        st.markdown(f"""
+### What is the solution suggestion?
+
+Once gaps are detected, the tool estimates **how many new lines** would be needed to fill
+each gap — but only if the gap size divides evenly into the group's inferred period.
+
+If a gap does not fit cleanly, it is marked `✗ does not fit cleanly — manual review`
+and is not counted in `lines_to_add`.
+
+### Which gaps are considered?
+
+| Gap type | When it exists |
+|---|---|
+| Internal gap | Date range inside the group span with no active line |
+| Start gap | `start_alignment` is "starts Nd late" → uncovered period at the beginning |
+| End gap | `end_alignment` is "ends Nd early" → uncovered period at the end |
+
+Note: "starts early" and "ends late" are **not** gaps — they are lines outside the header
+window, not missing lines.
+
+### Pseudo-code
+
+```
+lines_to_add  = 0
+solution_list = []   -- one entry per gap
+
+-- Build the full list of gaps to check
+all_gaps = [all internal gaps detected in coverage analysis]
+if start_diff > TOLERANCE_DAYS:
+    all_gaps.prepend( gap(header_start → group_start) )
+if end_diff < -TOLERANCE_DAYS:
+    all_gaps.append(  gap(group_end    → header_end)  )
+
+for each gap in all_gaps:
+    gap_days = gap.end - gap.start
+
+    -- Irregular patterns cannot be auto-solved
+    if inferred_period_pattern == "irregular":
+        solution_list.append("✗ irregular pattern — manual review")
+        continue
+
+    -- Try to fit N whole periods into the gap
+    n = round(gap_days / inferred_period_days)
+    fit_error = abs(gap_days - n × inferred_period_days)
+
+    if fit_error <= TOLERANCE_DAYS:
+        lines_to_add += n
+        solution_list.append(f"+{{n}} {{pattern}} line(s)")
+    else:
+        solution_list.append("✗ does not fit cleanly — manual review")
+
+-- Summarise
+gaps_solved_ratio = f"{{total_gaps_found}}gap/{{gaps_with_clean_solution}}l"
+```
+*(TOLERANCE_DAYS = **{TOLERANCE_DAYS}**)*
+
+### Worked examples
+
+**Example 1 — mixed result (one gap fits, one does not):**
+```
+Pattern = quarterly (90 days)
+
+Internal gap: Jul 1 → Aug 31 = 62 days
+  n = round(62 / 90) = 1
+  fit_error = |62 - 90| = 28  →  28 > {TOLERANCE_DAYS}  → "✗ does not fit cleanly"
+
+End gap: Oct 1 → Dec 31 = 92 days
+  n = round(92 / 90) = 1
+  fit_error = |92 - 90| = 2   →  2 ≤ {TOLERANCE_DAYS}   → "+1 quarterly line(s)"
+  lines_to_add += 1
+
+Result: lines_to_add = 1,  gaps_solved_ratio = "2gap/1l"
+```
+
+**Example 2 — double-quarter gap:**
+```
+Pattern = quarterly (90 days)
+
+Internal gap: Apr 1 → Sep 29 = 182 days
+  n = round(182 / 90) = round(2.02) = 2
+  fit_error = |182 - 180| = 2  →  2 ≤ {TOLERANCE_DAYS}  → "+2 quarterly line(s)"
+  lines_to_add += 2
+```
+
+**Example 3 — irregular pattern:**
+```
+Pattern = irregular  →  all gaps → "✗ irregular pattern — manual review"
+lines_to_add = 0
+```
+
+**Columns produced:**
+- `lines_to_add` — total lines needed across all cleanly-solvable gaps
+- `gaps_solved_ratio` — e.g. "3gap/2l"
+- `gap_list` — all gaps with date ranges and sizes
+- `solution_list` — parallel: "+N pattern line(s)" or "✗" per gap
+        """)
+
     # ── Current parameters ────────────────────────────────────────────────────
-    with st.expander("⚙️ Current analysis parameters", expanded=True):
+    with st.expander("Current analysis parameters", expanded=False):
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            st.markdown(f"**Date tolerance:** `{TOLERANCE_DAYS}` days")
+            st.caption(
+                "Gaps or misalignments smaller than this are treated as aligned. "
+                "Absorbs small administrative date shifts."
+            )
+        with pc2:
+            st.markdown("**Period buckets:**")
+            bucket_rows = [
+                {"Pattern": name, "Target days": target,
+                 "Tolerance ±": tol, "Valid range": f"{target-tol}–{target+tol} days"}
+                for name, target, tol in PERIOD_BUCKETS
+            ]
+            st.dataframe(
+                pd.DataFrame(bucket_rows),
+                hide_index=True,
+                use_container_width=True,
+            )
+            st.caption(
+                "Any duration outside all bucket ranges is labelled irregular. "
+                "Buckets are non-overlapping by design."
+            )
+
+    # ── Full column reference ─────────────────────────────────────────────────
+    with st.expander("Full column reference — all output columns"):
+        col_ref = [
+            # ── Group-level ──────────────────────────────────────────────────
+            ("group_line_count",        "Group",    "Total rows in the group — all states including cancelled and placeholder lines"),
+            ("group_active_line_count", "Group",    "Rows that passed all exclusion rules (not cancelled, not placeholder, not once-period) — used in all calculations"),
+            ("unlimit_qty_count",       "Group",    "Lines with C_UNLIMIT_QTY_DB = true — these lines have no quantity limit"),
+            ("orig_pres_count",         "Group",    "Lines with C_ORIG_PRES_LINE_DB = true — these lines receive +365 days when the header is renewed"),
+            ("groups_in_quotation",     "Group",    "How many distinct Catalog_No values exist in this Quotation_No — i.e. how many product groups share the same quotation"),
+            ("group_start",             "Group",    "Earliest effective start date among all active lines (after substituting header dates for empty fields)"),
+            ("group_end",               "Group",    "Latest effective end date among all active lines"),
+            ("group_span_days",         "Group",    "Naive span: group_end − group_start. Includes any internal gaps. Does NOT equal actual coverage when gaps exist"),
+            ("actual_coverage_days",    "Group",    "True days covered by at least one active line — calculated by merging all overlapping/adjacent periods (interval union)"),
+            ("inferred_period_pattern", "Group",    "Dominant repeating period detected by bucket voting: monthly, bi-monthly, quarterly, 4-month, semi-annual, annual, or irregular"),
+            ("inferred_period_days",    "Group",    "Target days for the inferred pattern (quarterly = 90, annual = 365). For irregular: median of active line durations"),
+            ("avg_period_days",         "Group",    "Simple mean of all active line durations — for reference only, not used to determine the pattern"),
+            ("period_confidence_pct",   "Group",    "% of active lines whose duration matches the inferred pattern. 100% = perfect agreement. < 50% = unclear pattern"),
+            ("active_line_periods",     "Group",    "Pipe-separated list of each active line's effective date range in date order — e.g. 'Jan 1 – Mar 31 | Apr 1 – Jun 30'"),
+            ("canonical_qty",           "Group",    "Most frequent BUY_QTY_DUE among active lines (mode). Tie-break: larger value wins"),
+            ("qty_confidence_pct",      "Group",    "% of active lines whose quantity equals the canonical quantity. 100% = all lines agree"),
+            ("active_line_qtys",        "Group",    "Pipe-separated list of each active line's BUY_QTY_DUE in date order — e.g. '100 | 100 | 200 | 100'"),
+            ("coverage_bar",            "Group",    "48-character ASCII timeline: █ = covered day · ░ = gap · ▓ = overlap · | = line boundary"),
+            ("gap_days",                "Group",    "Total uncovered days within the group span (group_span_days − actual_coverage_days). 0 = fully continuous"),
+            ("gap_count",               "Group",    "Number of distinct uncovered periods. Each gap must exceed TOLERANCE_DAYS to be counted"),
+            ("overlap_days",            "Group",    "Days covered simultaneously by two or more active lines (sum of durations − actual_coverage). 0 = no overlap"),
+            ("overlap_count",           "Group",    "Number of times a line starts before the previous line has ended — one event per such occurrence"),
+            ("gap_details",             "Group",    "Description of each internal gap: start date, end date, and size — e.g. 'Jul 1 → Aug 31 (62d)'"),
+            ("header_aligned",          "Group",    "YES if both start and end are within TOLERANCE_DAYS of the header. NO if either side is misaligned"),
+            ("start_alignment",         "Group",    "'aligned' (within tolerance), 'starts Nd late' (group after header start), 'starts Nd early' (group before header start)"),
+            ("end_alignment",           "Group",    "'aligned' (within tolerance), 'ends Nd early' (group before header end), 'ends Nd late' (group after header end)"),
+            ("lines_to_add",            "Group",    "Total new lines needed to fill all gaps that divide cleanly into the inferred period. Blank if no clean solution exists"),
+            ("gaps_solved_ratio",       "Group",    "e.g. '3gap/2l' = 3 gaps found, 2 fit the pattern cleanly, 1 requires manual review"),
+            ("gap_list",                "Group",    "All gaps considered for the solution (internal + header-alignment) with their date ranges and sizes"),
+            ("solution_list",           "Group",    "Parallel to gap_list: '+N pattern line(s)' if clean fit, '✗ does not fit cleanly' or '✗ irregular' if not"),
+            # ── Per-line ─────────────────────────────────────────────────────
+            ("line_period_bucket",      "Per line", "Period bucket for this line's duration: monthly, quarterly, annual, irregular — or 'excluded (cancelled / placeholder / once)'"),
+            ("is_period_outlier",       "Per line", "YES if this line's bucket differs from the group's inferred pattern. NO if it matches. N/A if the line is inactive"),
+            ("is_qty_outlier",          "Per line", "YES if this line's BUY_QTY_DUE differs from the group's canonical quantity. NO if it matches. N/A if inactive"),
+        ]
+        st.dataframe(
+            pd.DataFrame(col_ref, columns=["Column", "Level", "Description"]),
+            hide_index=True,
+            use_container_width=True,
+        )
         pc1, pc2 = st.columns(2)
         with pc1:
             st.markdown(f"**Date tolerance:** `{TOLERANCE_DAYS}` days")
