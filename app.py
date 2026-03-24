@@ -12,6 +12,10 @@ import io
 import pandas as pd
 import streamlit as st
 
+# Allow Pandas Styler to render large datasets without hitting the default 262k cell limit.
+# Without this, any file with more than ~4,000 rows causes a crash in the styled view.
+pd.set_option("styler.render.max_elements", 10_000_000)
+
 from analyze import (
     analyze_dataframe,
     get_summary_stats,
@@ -205,6 +209,13 @@ def render_table(df, label="", analysis_cols=None, key_cols=None):
         if pd.api.types.is_datetime64_any_dtype(display_df[c]):
             display_df[c] = display_df[c].dt.date
 
+    # group_start / group_end are datetime.date for active groups but the string "N/A"
+    # for all-cancelled groups — a mixed-type object column that crashes PyArrow.
+    # Convert to pure string so both the styled and fallback st.dataframe calls work.
+    for c in ["group_start", "group_end"]:
+        if c in display_df.columns and display_df[c].dtype == object:
+            display_df[c] = display_df[c].astype(str)
+
     if label:
         st.caption(
             label + "   ·   "
@@ -219,9 +230,9 @@ def render_table(df, label="", analysis_cols=None, key_cols=None):
             lambda _: style_table(display_df, analysis_cols, key_cols),
             axis=None,
         )
-        st.dataframe(styled, use_container_width=True, height=520)
+        st.dataframe(styled, width="stretch", height=520)
     except Exception:
-        st.dataframe(display_df, use_container_width=True, height=520)
+        st.dataframe(display_df, width="stretch", height=520)
 
 
 def focused_view(df, col_config, orig_keys, analysis_cols):
@@ -345,7 +356,7 @@ if not uploaded_file:
 
 # ── File preview ──────────────────────────────────────────────────────────────
 with st.expander("📄 File preview (first 10 rows)", expanded=False):
-    st.dataframe(raw_df.head(10), use_container_width=True)
+    st.dataframe(raw_df.head(10), width="stretch")
     st.caption(f"{len(raw_df):,} rows · {len(raw_df.columns)} columns")
 
 # ── Run analysis ──────────────────────────────────────────────────────────────
@@ -479,6 +490,9 @@ with tab_period:
     for _c in _display_p.columns:
         if pd.api.types.is_datetime64_any_dtype(_display_p[_c]):
             _display_p[_c] = _display_p[_c].dt.date
+    for _c in ["group_start", "group_end"]:
+        if _c in _display_p.columns and _display_p[_c].dtype == object:
+            _display_p[_c] = _display_p[_c].astype(str)
 
     _p_flat_styles = style_table(
         _display_p,
@@ -497,9 +511,9 @@ with tab_period:
     )
     try:
         _styled_p = _display_p.style.apply(lambda _: _p_flat_styles, axis=None)
-        st.dataframe(_styled_p, use_container_width=True, height=520)
+        st.dataframe(_styled_p, width="stretch", height=520)
     except Exception:
-        st.dataframe(_display_p, use_container_width=True, height=520)
+        st.dataframe(_display_p, width="stretch", height=520)
 
     with st.expander("Column guide — what each column in this table means"):
         st.markdown("""
@@ -883,6 +897,9 @@ with tab_solution:
     for _c in _display_sol.columns:
         if pd.api.types.is_datetime64_any_dtype(_display_sol[_c]):
             _display_sol[_c] = _display_sol[_c].dt.date
+    for _c in ["group_start", "group_end"]:
+        if _c in _display_sol.columns and _display_sol[_c].dtype == object:
+            _display_sol[_c] = _display_sol[_c].astype(str)
 
     # Apply cell styling while column names are still flat (style_table uses string names)
     _flat_styles = style_table(
@@ -903,9 +920,9 @@ with tab_solution:
     )
     try:
         _styled_sol = _display_sol.style.apply(lambda _: _flat_styles, axis=None)
-        st.dataframe(_styled_sol, use_container_width=True, height=520)
+        st.dataframe(_styled_sol, width="stretch", height=520)
     except Exception:
-        st.dataframe(_display_sol, use_container_width=True, height=520)
+        st.dataframe(_display_sol, width="stretch", height=520)
 
     _dl_sol, _ = st.columns([2, 5])
     with _dl_sol:
