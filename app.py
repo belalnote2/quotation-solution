@@ -12,10 +12,6 @@ import io
 import pandas as pd
 import streamlit as st
 
-# Allow Pandas Styler to render large datasets without hitting the default 262k cell limit.
-# Without this, any file with more than ~4,000 rows causes a crash in the styled view.
-pd.set_option("styler.render.max_elements", 10_000_000)
-
 from analyze import (
     analyze_dataframe,
     get_summary_stats,
@@ -122,118 +118,6 @@ def to_excel_bytes(df):
     return buf.getvalue()
 
 
-def style_table(df, analysis_cols=None, key_cols=None):
-    """
-    Three-layer visual styling:
-      Layer 1 (base)  — analysis columns: light blue tint (#eef5fb)
-      Layer 2         — key columns: stronger blue + bold (#cee4f5)
-      Layer 3 (top)   — issue cells: red/yellow overrides (same as before)
-    ERP source columns keep the default white background.
-    """
-    styles = pd.DataFrame("", index=df.index, columns=df.columns)
-
-    # Layer 1 — analysis column tint (all result columns as a visual packet)
-    for c in (analysis_cols or []):
-        if c in df.columns:
-            styles[c] = "background-color:#eef5fb"
-
-    # Layer 2 — key column emphasis (most important indicator per tab)
-    for c in (key_cols or []):
-        if c in df.columns:
-            styles[c] = "background-color:#cee4f5;font-weight:600"
-
-    # Layer 2b — period analysis columns: green tint to group them visually
-    _PERIOD_COLS = {"inferred_period_pattern", "inferred_period_days",
-                    "avg_period_days", "period_confidence_pct"}
-    for c in df.columns:
-        if c in _PERIOD_COLS:
-            styles[c] = "background-color:#e8f5e9"
-
-    # Layer 2c — solution columns: amber/orange tint to group them visually
-    _SOLUTION_COLS = {"lines_to_add", "gaps_solved_ratio", "gap_list", "solution_list"}
-    for c in df.columns:
-        if c in _SOLUTION_COLS:
-            styles[c] = "background-color:#fff8e1"
-
-    # Layer 3 — issue highlights (override everything above)
-    for c in df.columns:
-        if c in ("gap_days", "gap_count", "overlap_days", "overlap_count"):
-            num = pd.to_numeric(df[c], errors="coerce")
-            styles.loc[num > 0, c] = "background-color:#ffd6d6;color:#900;font-weight:600"
-        elif c == "header_aligned":
-            mask = df[c] == "NO"
-            styles.loc[mask, c] = "background-color:#ffd6d6;color:#900;font-weight:600"
-        elif c in ("is_period_outlier", "is_qty_outlier"):
-            mask = df[c] == "YES"
-            styles.loc[mask, c] = "background-color:#fff3cc;color:#664d00;font-weight:600"
-        elif c == "period_confidence_pct":
-            num = pd.to_numeric(df[c], errors="coerce")
-            styles.loc[num < 50,  c] = "background-color:#ffd6d6"
-            styles.loc[(num >= 50) & (num < 70), c] = "background-color:#fff3cc"
-        elif c == "qty_confidence_pct":
-            num = pd.to_numeric(df[c], errors="coerce")
-            styles.loc[num < 100, c] = "background-color:#fff3cc;color:#664d00"
-        elif c == "lines_to_add":
-            num = pd.to_numeric(df[c], errors="coerce")
-            styles.loc[num > 0, c] = "background-color:#ffd6d6"
-        elif c in ("unlimit_qty_count", "orig_pres_count"):
-            num = pd.to_numeric(df[c], errors="coerce")
-            styles.loc[num > 0, c] = "background-color:#cee4f5;font-weight:600"
-
-    return styles
-
-
-def build_issues_mask(df):
-    """Boolean mask: rows whose group has at least one issue."""
-    return (
-        (pd.to_numeric(df.get("gap_days",     pd.Series(0, index=df.index)), errors="coerce") > 0)
-        | (pd.to_numeric(df.get("overlap_days", pd.Series(0, index=df.index)), errors="coerce") > 0)
-        | (df.get("header_aligned", pd.Series("", index=df.index)) == "NO")
-        | (pd.to_numeric(df.get("period_confidence_pct", pd.Series()), errors="coerce") < 70)
-        | (pd.to_numeric(df.get("qty_confidence_pct",    pd.Series()), errors="coerce") < 100)
-    )
-
-
-def build_group_summary(df, col_config):
-    """One row per (Quotation_No, Catalog_No) — group-level columns only."""
-    key_cols = [col_config["quotation_no"], col_config["catalog_no"]]
-    keep     = key_cols + [c for c in GROUP_COLS if c in df.columns]
-    return df[keep].drop_duplicates(subset=key_cols).reset_index(drop=True)
-
-
-def render_table(df, label="", analysis_cols=None, key_cols=None):
-    """Render a styled dataframe, fall back to plain if styling fails."""
-    # Strip time component from all datetime columns (show 2025-06-27 not 2025-06-27 00:00:00)
-    display_df = df.copy()
-    for c in display_df.columns:
-        if pd.api.types.is_datetime64_any_dtype(display_df[c]):
-            display_df[c] = display_df[c].dt.date
-
-    # group_start / group_end are datetime.date for active groups but the string "N/A"
-    # for all-cancelled groups — a mixed-type object column that crashes PyArrow.
-    # Convert to pure string so both the styled and fallback st.dataframe calls work.
-    for c in ["group_start", "group_end"]:
-        if c in display_df.columns and display_df[c].dtype == object:
-            display_df[c] = display_df[c].astype(str)
-
-    if label:
-        st.caption(
-            label + "   ·   "
-            "⬜ ERP source   "
-            "🟦 Analysis result   "
-            "🔷 Key indicator   "
-            "🟡 Warning   "
-            "🔴 Issue"
-        )
-    try:
-        styled = display_df.style.apply(
-            lambda _: style_table(display_df, analysis_cols, key_cols),
-            axis=None,
-        )
-        st.dataframe(styled, width="stretch", height=520)
-    except Exception:
-        st.dataframe(display_df, width="stretch", height=520)
-
 
 def focused_view(df, col_config, orig_keys, analysis_cols):
     """
@@ -252,13 +136,6 @@ def focused_view(df, col_config, orig_keys, analysis_cols):
             final.append(c)
     return df[final] if final else df
 
-
-def issues_only_toggle(df, mask, key):
-    """Checkbox to filter to issue rows only. Returns filtered df."""
-    c1, c2 = st.columns([5, 1])
-    with c2:
-        toggle = st.checkbox("Issues only", value=False, key=f"tog_{key}")
-    return df[mask] if toggle else df, toggle
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -354,10 +231,7 @@ if not uploaded_file:
     st.info("👈 Upload your Excel file in the sidebar to get started.")
     st.stop()
 
-# ── File preview ──────────────────────────────────────────────────────────────
-with st.expander("📄 File preview (first 10 rows)", expanded=False):
-    st.dataframe(raw_df.head(10), width="stretch")
-    st.caption(f"{len(raw_df):,} rows · {len(raw_df.columns)} columns")
+st.caption(f"Loaded: **{len(raw_df):,} rows** · {len(raw_df.columns)} columns")
 
 # ── Run analysis ──────────────────────────────────────────────────────────────
 if run_btn:
@@ -460,62 +334,18 @@ with tab_period:
         analysis_cols = _period_tab_cols,
     )
 
-    # ── MultiIndex column headers ──────────────────────────────────────────────
-    _PERIOD_SECTIONS = [
-        ("Identifiers",      [col_config.get("quotation_no", ""),
-                              col_config.get("catalog_no", "")]),
-        ("Raw Data",         [col_config.get("start_date", ""),
-                              col_config.get("end_date", ""),
-                              col_config.get("state", ""),
-                              col_config.get("header_start", ""),
-                              col_config.get("header_end", ""),
-                              col_config.get("qty", "")]),
-        ("Period (line)",    ["line_period_bucket", "is_period_outlier"]),
-        ("Group Info",       ["group_line_count", "group_active_line_count",
-                              "group_start", "group_end"]),
-        ("Period Analysis",  ["inferred_period_pattern", "inferred_period_days",
-                              "avg_period_days", "period_confidence_pct"]),
-        ("Quantity Analysis",["canonical_qty", "qty_confidence_pct", "active_line_qtys"]),
-    ]
+    _dl_p, _ = st.columns([2, 5])
+    with _dl_p:
+        st.download_button(
+            label="⬇️ Download line-level analysis (Excel)",
+            data=to_excel_bytes(view_p),
+            file_name="quotation_line_analysis.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="dl_period",
+        )
 
-    _p_flat_to_section = {}
-    for _sec, _cols in _PERIOD_SECTIONS:
-        for _c in _cols:
-            _p_flat_to_section[_c] = _sec
-
-    _p_mi_tuples = [(_p_flat_to_section.get(c, "Other"), c) for c in view_p.columns]
-    _p_mi_cols   = pd.MultiIndex.from_tuples(_p_mi_tuples)
-
-    _display_p = view_p.copy()
-    for _c in _display_p.columns:
-        if pd.api.types.is_datetime64_any_dtype(_display_p[_c]):
-            _display_p[_c] = _display_p[_c].dt.date
-    for _c in ["group_start", "group_end"]:
-        if _c in _display_p.columns and _display_p[_c].dtype == object:
-            _display_p[_c] = _display_p[_c].astype(str)
-
-    _p_flat_styles = style_table(
-        _display_p,
-        analysis_cols=_period_tab_cols,
-        key_cols=["is_period_outlier", "period_confidence_pct"],
-    )
-
-    _display_p.columns    = _p_mi_cols
-    _p_flat_styles.columns = _p_mi_cols
-
-    st.caption(
-        f"{len(df_p):,} rows   ·   "
-        "Group-level columns (Group Info, Period Analysis, Quantity Analysis) "
-        "repeat the same value on every line of that group   ·   "
-        "⬜ Raw Data   🟦 Analysis result   🔷 Key   🟡 Warning   🔴 Issue"
-    )
-    try:
-        _styled_p = _display_p.style.apply(lambda _: _p_flat_styles, axis=None)
-        st.dataframe(_styled_p, width="stretch", height=520)
-    except Exception:
-        st.dataframe(_display_p, width="stretch", height=520)
-
-    with st.expander("Column guide — what each column in this table means"):
+    with st.expander("Column guide — what each column in the download means"):
         st.markdown("""
 **This table shows one row per quotation line** — so you can see both the line's own values
 and the group-level analysis results repeated on every line that belongs to the same group.
@@ -587,13 +417,6 @@ with tab_align:
     ]
     _align_all = _align_orig + [c for c in _align_analysis if c in group_align.columns]
     view_align = group_align[[c for c in _align_all if c in group_align.columns]]
-
-    render_table(
-        view_align,
-        label=f"{len(view_align):,} groups",
-        analysis_cols=_align_analysis,
-        key_cols=["header_aligned", "start_alignment", "end_alignment", "lines_to_add"],
-    )
 
     _dl_align, _ = st.columns([2, 5])
     with _dl_align:
@@ -858,71 +681,6 @@ with tab_solution:
     ]
     _sol_all = _sol_orig + [c for c in _sol_analysis if c in group_sol.columns]
     view_sol = group_sol[[c for c in _sol_all if c in group_sol.columns]]
-
-    # ── Grouped column headers (MultiIndex) ───────────────────────────────────
-    # Maps each flat column name to a section label.
-    # The section label appears as a spanning group header above related columns.
-    _SOL_SECTIONS = [
-        ("Identifiers",      [col_config.get("quotation_no",""), col_config.get("catalog_no","")]),
-        ("Header Dates",     [col_config.get("header_start",""), col_config.get("header_end",""),
-                              "groups_in_quotation"]),
-        ("Group Info",       ["group_line_count", "group_active_line_count",
-                              "group_start", "group_end"]),
-        ("Coverage",         ["actual_coverage_days", "group_span_days",
-                              "gap_days", "gap_count",
-                              "overlap_days", "overlap_count"]),
-        ("Header Alignment", ["header_aligned", "start_alignment", "end_alignment"]),
-        ("Visual",           ["coverage_bar", "active_line_periods"]),
-        ("Period Analysis",    ["inferred_period_pattern", "inferred_period_days",
-                                "avg_period_days", "period_confidence_pct"]),
-        ("Quantity Analysis",  ["canonical_qty", "qty_confidence_pct", "active_line_qtys"]),
-        ("Solution",           ["lines_to_add", "gaps_solved_ratio",
-                                "gap_list", "solution_list"]),
-    ]
-
-    # Build MultiIndex tuples in the exact column order of view_sol
-    _flat_to_section = {}
-    for _section, _cols in _SOL_SECTIONS:
-        for _c in _cols:
-            _flat_to_section[_c] = _section
-
-    _mi_tuples = [
-        (_flat_to_section.get(c, "Other"), c)
-        for c in view_sol.columns
-    ]
-    _mi_cols = pd.MultiIndex.from_tuples(_mi_tuples)
-
-    # Strip datetime columns for display
-    _display_sol = view_sol.copy()
-    for _c in _display_sol.columns:
-        if pd.api.types.is_datetime64_any_dtype(_display_sol[_c]):
-            _display_sol[_c] = _display_sol[_c].dt.date
-    for _c in ["group_start", "group_end"]:
-        if _c in _display_sol.columns and _display_sol[_c].dtype == object:
-            _display_sol[_c] = _display_sol[_c].astype(str)
-
-    # Apply cell styling while column names are still flat (style_table uses string names)
-    _flat_styles = style_table(
-        _display_sol,
-        analysis_cols=_sol_analysis,
-        key_cols=["gap_days", "gap_count", "lines_to_add", "period_confidence_pct"],
-    )
-
-    # Rename both the data and the styles DataFrame to the same MultiIndex
-    _display_sol.columns = _mi_cols
-    _flat_styles.columns  = _mi_cols
-
-    st.caption(
-        f"{len(view_sol):,} groups   ·   "
-        "Column sections: Identifiers | Header Dates | Group Info | "
-        "Coverage | Header Alignment | Visual | Period Analysis | Solution   ·   "
-        "⬜ ERP source   🟦 Analysis result   🔷 Key   🟡 Warning   🔴 Issue"
-    )
-    try:
-        _styled_sol = _display_sol.style.apply(lambda _: _flat_styles, axis=None)
-        st.dataframe(_styled_sol, width="stretch", height=520)
-    except Exception:
-        st.dataframe(_display_sol, width="stretch", height=520)
 
     _dl_sol, _ = st.columns([2, 5])
     with _dl_sol:
